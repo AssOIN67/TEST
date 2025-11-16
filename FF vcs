@@ -1,0 +1,90 @@
+ local Players = game:GetService("Players") local RunService = game:GetService("RunService") local Camera = workspace.CurrentCamera local LocalPlayer = Players.LocalPlayer local ReplicatedStorage = game:GetService("ReplicatedStorage") local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+
+-- 4️⃣ Variables local SilentAimEnabled = false local AttackAntiLockEnabled = false local FOV = 200 local CurrentTarget local head, aimPos local PREDICTION_FACTOR = 0.165
+
+-- 5️⃣ Allowed Guns local GunNames = { "P226","MP5","M24","Draco","Glock","Sawnoff","Uzi","G3","C9", "Hunting Rifle","Anaconda","AK47","Remington","Double Barrel" } local GunLookup = {} for _, name in pairs(GunNames) do GunLookup[name] = true end
+
+-- 6️⃣ Drawing (FOV Circle) local fovCircle = Drawing.new("Circle") fovCircle.Color = Color3.new(1,1,1) fovCircle.Thickness = 1 fovCircle.NumSides = 100 fovCircle.Radius = FOV fovCircle.Filled = false fovCircle.Visible = false
+
+-- 7️⃣ Drawing (Black Tracer) local tracerLine = Drawing.new("Line") tracerLine.Color = Color3.new(0,0,0) tracerLine.Thickness = 1 tracerLine.Visible = false
+
+-- 8️⃣ Helper Functions local function GetClosestTarget() local closest local shortest = math.huge local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2) for _, player in pairs(Players:GetPlayers()) do if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then local screenPos, onScreen = Camera:WorldToViewportPoint(player.Character.Head.Position) if onScreen then local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude if dist < FOV and dist < shortest then shortest = dist closest = player end end end end return closest end
+
+local function PredictPosition(headPart) local root = headPart.Parent:FindFirstChild("HumanoidRootPart") if not root then return headPart.Position end local velocity = root.Velocity local prediction = headPart.Position + (velocity * PREDICTION_FACTOR) local seat = root:FindFirstChildWhichIsA("WeldConstraint") or root:FindFirstChildWhichIsA("Weld") if seat and seat.Part0 then prediction = headPart.Position + (seat.Part0.Velocity * PREDICTION_FACTOR * 1.2) end return prediction end
+
+-- Anti-Lock (ไม่ยุ่งกับ prediction) local function AntiLockPosition(headPart) return headPart.Position end
+
+local function IsHoldingAllowedGun(args) local ok, weapon = pcall(function() return args[3] end) if not ok then return false end if typeof(weapon) == "Instance" and GunLookup[weapon.Name] then return true end for _, child in pairs(LocalPlayer.Character:GetChildren()) do if (child:IsA("Tool") or child:IsA("Model")) and GunLookup[child.Name] then return true end end return false end
+
+-- 9️⃣ Hook FireServer local oldFire oldFire = hookfunction(send.FireServer, function(self, ...) local args = {...} if SilentAimEnabled and IsHoldingAllowedGun(args) then CurrentTarget = GetClosestTarget() if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then head = CurrentTarget.Character.Head
+
+-- เลือกตำแหน่งตาม toggle
+        if AttackAntiLockEnabled then
+            aimPos = AntiLockPosition(head) -- เป้านิ่งมาก
+        else
+            aimPos = PredictPosition(head) -- ปกติ
+        end
+
+        -- Bullet Beam (Black)
+        local ourHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+        if ourHead then
+            local startPos = ourHead.Position
+            local distance = (aimPos - startPos).Magnitude
+            local beam = Instance.new("Part", workspace)
+            beam.Anchored = true
+            beam.CanCollide = false
+            beam.Material = Enum.Material.Neon
+            beam.Color = Color3.new(0,0,0)
+            beam.Transparency = 0.25
+            beam.Size = Vector3.new(0.15,0.15,distance)
+            beam.CFrame = CFrame.new(startPos, aimPos) * CFrame.new(0,0,-distance/2)
+            game:GetService("Debris"):AddItem(beam, 0.15)
+        end
+
+        -- Silent Aim Overrides
+        args[4] = CFrame.new(1/0,1/0,1/0,0/0,0/0,0/0,0/0,0/0,0/0,0/0,0/0,0/0)
+        args[5] = {[1]={[1]={["Instance"] = head, ["Position"] = aimPos}}}
+    end
+end
+return oldFire(self, unpack(args))
+
+end)
+
+-- 🔟 Render Visuals RunService.RenderStepped:Connect(function() local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2) fovCircle.Position = center fovCircle.Radius = FOV
+
+if not SilentAimEnabled then
+    fovCircle.Visible = false
+    tracerLine.Visible = false
+    return
+end
+
+fovCircle.Visible = true
+
+local target = GetClosestTarget()
+if target and target.Character and target.Character:FindFirstChild("Head") then
+    local predicted
+    if AttackAntiLockEnabled then
+        predicted = AntiLockPosition(target.Character.Head)
+    else
+        predicted = PredictPosition(target.Character.Head)
+    end
+
+    local screenPos, ok = Camera:WorldToViewportPoint(predicted)
+    if ok then
+        local ourHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+        if ourHead then
+            local s1, ok2 = Camera:WorldToViewportPoint(ourHead.Position)
+            if ok2 then
+                tracerLine.From = Vector2.new(s1.X, s1.Y)
+                tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
+                tracerLine.Visible = true
+            end
+        end
+    else
+        tracerLine.Visible = false
+    end
+else
+    tracerLine.Visible = false
+end
+
+end)
