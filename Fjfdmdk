@@ -1,0 +1,233 @@
+-- 1️⃣ โหลด WindUI และบริการต่างๆ
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- 2️⃣ สร้างหน้าต่าง
+local Window = WindUI:CreateWindow({
+    Title = "👑XIUCO HUB PVP | v.1 | paid⚔️",
+    Icon = "zap",
+    Author = "My Discord XIUCO     https://discord.gg/sYjE3Kf3t",
+    Folder = "XINCOHubFolder",
+    Size = UDim2.fromOffset(400, 200),
+    Theme = "Dark",
+    Transparent = true,
+    Resizable = true,
+})
+
+-- 3️⃣ Tab Combat
+local CombatTab = Window:Tab({Title = "Combat", Icon = "crosshair"})
+CombatTab:Section({Title="Gun :"})
+
+-- 4️⃣ ตัวแปร
+local SilentAimEnabled = false
+local AttackAntiLockEnabled = false
+local MagicBulletEnabled = false
+local FOV = 200
+local CurrentTarget
+local head, aimPos
+local TargetPart = "Head" -- default เป็น Head, จะเปลี่ยนเป็นตัวได้
+
+local GunNames = {
+    "P226","MP5","M24","Draco","Glock","Sawnoff","Uzi","G3","C9",
+    "Hunting Rifle","Anaconda","AK47","Remington","Double Barrel"
+}
+local GunLookup = {}
+for _, name in pairs(GunNames) do GunLookup[name] = true end
+
+-- 5️⃣ FOV Circle
+local fovCircle = Drawing.new("Circle")
+fovCircle.Color = Color3.new(1,1,1)
+fovCircle.Thickness = 1
+fovCircle.NumSides = 100
+fovCircle.Radius = FOV
+fovCircle.Filled = false
+fovCircle.Visible = false
+
+-- 6️⃣ Tracer Line (สีดำ)
+local tracerLine = Drawing.new("Line")
+tracerLine.Color = Color3.new(0,0,0)
+tracerLine.Thickness = 1
+tracerLine.Visible = false
+
+-- 7️⃣ Prediction Factor
+local PREDICTION_FACTOR_NORMAL = 0.165
+local PREDICTION_FACTOR = PREDICTION_FACTOR_NORMAL
+local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+
+-- 8️⃣ ฟังก์ชันช่วย
+local function GetClosestTarget()
+    local closest
+    local shortest = math.huge
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(TargetPart) then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(player.Character[TargetPart].Position)
+            if onScreen then
+                local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                if dist < FOV and dist < shortest then
+                    shortest = dist
+                    closest = player
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function PredictPosition(part)
+    if AttackAntiLockEnabled then
+        return part.Position -- Anti-Lock: เป้านิ่งสุด
+    end
+    local root = part.Parent:FindFirstChild("HumanoidRootPart")
+    if not root then return part.Position end
+    local velocity = root.Velocity
+    local prediction = part.Position + (velocity * PREDICTION_FACTOR)
+    local seat = root:FindFirstChildWhichIsA("WeldConstraint") or root:FindFirstChildWhichIsA("Weld")
+    if seat and seat.Part0 then
+        prediction = part.Position + (seat.Part0.Velocity * PREDICTION_FACTOR * 1.2)
+    end
+    return prediction
+end
+
+local function IsHoldingAllowedGun(args)
+    local ok, weapon = pcall(function() return args[3] end)
+    if not ok then return false end
+    if typeof(weapon) == "Instance" and GunLookup[weapon.Name] then return true end
+    for _, child in pairs(LocalPlayer.Character:GetChildren()) do
+        if (child:IsA("Tool") or child:IsA("Model")) and GunLookup[child.Name] then return true end
+    end
+    return false
+end
+
+-- 9️⃣ Hook ยิง
+local oldFire
+oldFire = hookfunction(send.FireServer, function(self, ...)
+    local args = {...}
+    if SilentAimEnabled and IsHoldingAllowedGun(args) then
+        CurrentTarget = GetClosestTarget()
+        if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild(TargetPart) then
+            head = CurrentTarget.Character[TargetPart]
+            aimPos = PredictPosition(head)
+
+            local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+            if myHead then
+                -- Bullet Beam
+                local distance = (aimPos - myHead.Position).Magnitude
+                local beam = Instance.new("Part", workspace)
+                beam.Anchored = true
+                beam.CanCollide = false
+                beam.Material = Enum.Material.Neon
+                beam.Color = Color3.new(0,0,0)
+                beam.Transparency = 0.25
+                beam.Size = Vector3.new(0.15,0.15,distance)
+                beam.CFrame = CFrame.new(myHead.Position, aimPos) * CFrame.new(0,0,-distance/2)
+                game:GetService("Debris"):AddItem(beam,0.15)
+
+                -- Magic Bullet
+                if MagicBulletEnabled then
+                    args[4] = CFrame.new(myHead.Position, aimPos)
+                    args[5] = {{{Normal=(aimPos-myHead.Position).Unit,Instance=head,Position=aimPos}}}
+                else
+                    args[4] = CFrame.new(1/0,1/0,1/0,0/0,0/0,0/0,0/0,0/0,0/0,0/0,0/0,0/0)
+                    args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
+                end
+            end
+        end
+    end
+    return oldFire(self, unpack(args))
+end)
+
+-- 🔟 RenderStepped วาด FOV + Tracer
+RunService.RenderStepped:Connect(function()
+    local viewportCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    fovCircle.Position = viewportCenter
+    fovCircle.Radius = FOV
+
+    if not SilentAimEnabled then
+        fovCircle.Visible = false
+        tracerLine.Visible = false
+        return
+    end
+
+    fovCircle.Visible = true
+
+    local target = GetClosestTarget()
+    if target and target.Character and target.Character:FindFirstChild(TargetPart) then
+        local predictedPos = PredictPosition(target.Character[TargetPart])
+        local screenPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
+        if onScreen then
+            local ourHeadPos = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position
+            if ourHeadPos then
+                local screenStart, startOnScreen = Camera:WorldToViewportPoint(ourHeadPos)
+                if startOnScreen then
+                    tracerLine.From = Vector2.new(screenStart.X, screenStart.Y)
+                    tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
+                    tracerLine.Visible = true
+                else
+                    tracerLine.Visible = false
+                end
+            else
+                tracerLine.Visible = false
+            end
+        else
+            tracerLine.Visible = false
+        end
+    else
+        tracerLine.Visible = false
+    end
+end)
+
+-- 1️⃣1️⃣ Toggle Silent Aim
+CombatTab:Toggle({
+    Title = "🔥Silent Aim [ ยิงคมๆ ]",
+    Desc = "ล็อคหัวแบบเนียนๆ ยิงพวกกันไม่โดน",
+    Icon = "circle-check",
+    Value = SilentAimEnabled,
+    Callback = function(state)
+        SilentAimEnabled = state
+        fovCircle.Visible = state
+        tracerLine.Visible = state
+    end
+})
+
+-- 1️⃣2️⃣ Toggle Attack Anti-Lock
+CombatTab:Toggle({
+    Title = "Attack Anti-Lock",
+    Desc = "เปิดใช้งาน: เป้านิ่งสุด เส้น Tracer ไม่แกว่ง",
+    Icon = "circle-check",
+    Value = AttackAntiLockEnabled,
+    Callback = function(state)
+        AttackAntiLockEnabled = state
+        if state then
+            PREDICTION_FACTOR = 0
+        else
+            PREDICTION_FACTOR = PREDICTION_FACTOR_NORMAL
+        end
+    end
+})
+
+-- 1️⃣3️⃣ Dropdown เปลี่ยนล็อค Head / ตัว
+CombatTab:Dropdown({
+    Title = "Target Part",
+    Desc = "เลือกส่วนที่จะล็อค",
+    Values = {"Head","UpperTorso","HumanoidRootPart"},
+    Value = "Head",
+    Callback = function(option)
+        TargetPart = option
+    end
+})
+
+-- 1️⃣4️⃣ Toggle Magic Bullet
+CombatTab:Toggle({
+    Title = "Magic Bullet",
+    Desc = "เปิด: ยิงทะลุ / ปิด: ยิงไม่ทะลุ",
+    Icon = "magic",
+    Value = MagicBulletEnabled,
+    Callback = function(state)
+        MagicBulletEnabled = state
+    end
+})
